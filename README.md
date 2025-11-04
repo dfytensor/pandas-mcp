@@ -42,6 +42,39 @@ python examples/example_usage.py
 ### 3. 手动测试
 你可以手动启动服务器，然后使用任何MCP兼容的客户端连接到它。
 
+## 智能数据分析智能体
+
+我们新增了一个基于 Agno 框架的智能数据分析智能体，具备以下特点：
+
+### 主要功能
+1. **自然语言交互**: 用户可以用自然语言描述数据分析需求
+2. **上下文管理**: 智能体维护分析过程的上下文状态
+3. **自动积木配置**: 根据用户需求自动生成合适的分析流程
+4. **知识增强**: 利用内置知识库提升分析质量
+
+### 核心组件
+- `DataAnalyzerAgent`: 主智能体类
+- 知识库系统：包含数据分析最佳实践和指南
+- 上下文管理系统：跟踪数据集和分析历史
+- 自然语言接口：支持流式响应
+
+### 使用方法
+```python
+from data_analyzer_agent import DataAnalyzerAgent
+
+# 创建智能体实例
+analyzer = DataAnalyzerAgent()
+
+# 加载数据
+analyzer.load_data("path/to/data.csv", "my_dataset")
+
+# 执行分析
+analyzer.execute_analysis("请分析年龄和收入的关系")
+
+# 与智能体对话
+analyzer.chat("数据中有哪些列？")
+```
+
 ## 积木类型说明
 
 ### 1. 数据清洗积木 (clean)

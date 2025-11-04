@@ -6,3 +6,6 @@ seaborn
 plotly
 httpx
 python-dotenv
+agno
+lancedb
+openai
