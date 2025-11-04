@@ -164,6 +164,8 @@ class PandasBlocksEngine:
                 return self._analyze_block(df, params, block_name)
             elif block_type == "groupby":
                 return self._groupby_block(df, params, block_name)
+            elif block_type == "join":
+                return self._join_block(df, params, block_name)
             elif block_type == "visualize":
                 return self._visualize_block(df, params, block_name)
             else:
@@ -335,6 +337,62 @@ class PandasBlocksEngine:
 
         return {"data": df, "summary": "分组聚合参数不完整，跳过此操作"}
 
+    def _join_block(self, df: pd.DataFrame, params: Dict, block_name: str) -> Dict:
+        """表关联积木"""
+        try:
+            # 获取关联参数
+            right_dataset_id = params.get("right_dataset_id")
+            join_type = params.get("join_type", "inner")  # inner, left, right, outer
+            left_on = params.get("left_on")
+            right_on = params.get("right_on")
+            left_columns = params.get("left_columns")
+            right_columns = params.get("right_columns")
+            suffixes = params.get("suffixes", ("_left", "_right"))
+            
+            # 检查右表是否存在
+            if right_dataset_id not in self.datasets:
+                return {"error": f"右表数据集不存在: {right_dataset_id}"}
+            
+            # 获取右表数据
+            right_df = self.datasets[right_dataset_id].copy()
+            
+            # 如果指定了要保留的列，则进行筛选
+            if left_columns:
+                # 确保指定的列存在于左表中
+                valid_left_columns = [col for col in left_columns if col in df.columns]
+                df = df[valid_left_columns]
+            
+            if right_columns:
+                # 确保指定的列存在于右表中
+                valid_right_columns = [col for col in right_columns if col in right_df.columns]
+                right_df = right_df[valid_right_columns]
+            
+            # 执行关联操作
+            if left_on and right_on:
+                # 基于指定列进行关联
+                result_df = pd.merge(df, right_df, left_on=left_on, right_on=right_on, 
+                                   how=join_type, suffixes=suffixes)
+            else:
+                # 基于索引进行关联
+                result_df = pd.merge(df, right_df, left_index=True, right_index=True, 
+                                   how=join_type, suffixes=suffixes)
+            
+            return {
+                "data": result_df,
+                "summary": f"表关联完成: {join_type} join, {df.shape} + {right_df.shape} -> {result_df.shape}",
+                "details": {
+                    "join_type": join_type,
+                    "left_table_shape": df.shape,
+                    "right_table_shape": right_df.shape,
+                    "result_shape": result_df.shape,
+                    "left_on": left_on,
+                    "right_on": right_on
+                }
+            }
+            
+        except Exception as e:
+            return {"error": f"表关联执行错误: {str(e)}", "traceback": traceback.format_exc()}
+
     def _visualize_block(self, df: pd.DataFrame, params: Dict, block_name: str) -> Dict:
         """可视化积木"""
         chart_type = params.get("chart_type", "bar")
@@ -453,6 +511,16 @@ def execute_analysis_pipeline(blocks_config: List[Dict], dataset_id: str = None)
                 }
             },
             {
+                "type": "join",
+                "name": "数据关联",
+                "params": {
+                    "right_dataset_id": "another_dataset_id",
+                    "join_type": "inner",
+                    "left_on": "id",
+                    "right_on": "user_id"
+                }
+            },
+            {
                 "type": "analyze",
                 "name": "基础分析",
                 "params": {
@@ -526,5 +594,13 @@ if __name__ == "__main__":
     print("- get_dataset_information: 获取数据集信息")
     print("- quick_analysis: 快速分析")
     print("- get_analysis_history: 获取分析历史")
+    print("\n支持的积木类型:")
+    print("- clean: 数据清洗")
+    print("- filter: 数据过滤")
+    print("- transform: 数据转换")
+    print("- analyze: 数据分析")
+    print("- groupby: 分组聚合")
+    print("- join: 表关联 (新增)")
+    print("- visualize: 数据可视化")
 
     mcp.run(transport="stdio")
