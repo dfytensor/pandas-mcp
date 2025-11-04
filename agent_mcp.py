@@ -108,13 +108,13 @@ async def run_data_analysis_agent(message: str) -> None:
     # 将知识添加到知识库（使用异步方式）
     await knowledge.add_content_async(
         name="Data Analysis Guide",
-        content=knowledge_content,
+        text_content=knowledge_content,
     )
     
     # 使用streamable-http替代已弃用的SSE
     async with MCPTools(
-        transport="streamable-http", 
-        url="http://127.0.0.1:8000"  # 默认FastMCP HTTP地址
+        transport="sse",
+        url="http://127.0.0.1:8000/sse"  # 默认FastMCP HTTP地址
     ) as data_analysis_server:
         # 创建智能体，使用LMStudio模型（参考data_analyzer_agent.py）并连接到MCP服务端
         agent = Agent(

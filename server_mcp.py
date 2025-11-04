@@ -347,4 +347,4 @@ if __name__ == "__main__":
     print("- get_data_summary: 获取数据综合摘要")
     
     # 运行MCP服务器，使用HTTP协议
-    mcp.run(transport="http")
+    mcp.run(transport="sse")
