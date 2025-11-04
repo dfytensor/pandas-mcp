@@ -19,6 +19,14 @@ from agno.knowledge.embedder.openai import OpenAIEmbedder
 # 导入pandas-mcp服务器中的引擎类
 from server import PandasBlocksEngine
 
+# 尝试导入sklearn数据集
+try:
+    from sklearn.datasets import load_iris, load_wine, load_breast_cancer, load_diabetes
+    from sklearn.datasets import fetch_california_housing
+    SKLEARN_AVAILABLE = True
+except ImportError:
+    SKLEARN_AVAILABLE = False
+
 
 class DataAnalyzerAgent:
     """智能数据分析智能体"""
@@ -33,7 +41,7 @@ class DataAnalyzerAgent:
                 search_type=SearchType.vector,
                 embedder=OpenAIEmbedder(
                     id="text-embedding-nomic-embed-text-v1.5",
-                    base_url="http://172.16.2.10:1234/v1",
+                    base_url="http://127.0.0.1:1234/v1",
                     api_key="sk-nomic-api-key",
                     dimensions=768
                 ),
@@ -44,9 +52,9 @@ class DataAnalyzerAgent:
         self._setup_knowledge()
         
         # 初始化模型
-        self.model = LMStudio(id="qwen3-1.7b")
+        self.model = LMStudio(id="qwen3-4b-thinking-2507")
         
-        # 创建智能体
+        # 创建智能体，启用工具调用功能
         self.agent = Agent(
             model=self.model,
             knowledge=self.knowledge,
@@ -55,6 +63,8 @@ class DataAnalyzerAgent:
             # 设置为False，因为智能体默认为search_knowledge=True
             search_knowledge=False,
             markdown=True,
+            # 启用工具调用
+            tools=[self.get_dataset_columns, self.get_dataset_shape, self.get_current_dataset_info],
         )
         
         # 初始化数据分析引擎
@@ -83,6 +93,7 @@ class DataAnalyzerAgent:
 - 支持从本地文件路径加载CSV数据
 - 支持从URL加载数据
 - 支持直接粘贴CSV格式文本
+- 支持从sklearn加载标准数据集
 
 ### 2. 数据清洗
 - 处理缺失值
@@ -115,6 +126,7 @@ class DataAnalyzerAgent:
 1. 提供本地CSV文件路径
 2. 提供在线CSV文件URL
 3. 直接粘贴CSV格式的文本数据
+4. 从sklearn加载标准机器学习数据集（如boston、iris、wine等）
 
 ### 发起分析请求
 用户可以直接使用自然语言描述想要进行的分析，例如：
@@ -164,12 +176,22 @@ class DataAnalyzerAgent:
 3. 对分类变量和数值变量采用不同的分析方法
 4. 使用适当的可视化方式展示分析结果
 5. 保留分析历史以便后续参考
+
+## 工具使用说明
+
+智能体可以使用以下工具来获取数据信息：
+
+1. get_current_dataset_info(): 获取当前数据集的完整信息
+2. get_dataset_columns(): 获取当前数据集的列信息
+3. get_dataset_shape(): 获取当前数据集的形状信息
+
+当用户询问关于数据集结构的问题时，智能体会自动调用相应工具获取真实数据信息。
         """
         
         # 写入知识文件
         with open("data_analysis_knowledge.txt", "w", encoding="utf-8") as f:
             f.write(knowledge_content)
-            
+
         # 将知识添加到知识库
         self.knowledge.add_content(
             name="Data Analysis Guide",
@@ -200,6 +222,7 @@ class DataAnalyzerAgent:
 - 在执行每一步操作前，简要说明你将要做什么
 - 以易于理解的方式呈现分析结果，避免过多的专业术语
 - 如果遇到错误，清晰地解释问题所在并提出解决方案
+- 当用户询问数据集结构信息时，使用工具自动获取真实数据
 
 请记住，你的目标是帮助用户从数据中获得有价值的洞察，而不仅仅是执行技术操作。
         """
@@ -209,7 +232,7 @@ class DataAnalyzerAgent:
         加载数据
         
         Args:
-            data_source: 数据源，可以是文件路径、URL或CSV文本
+            data_source: 数据源，可以是文件路径、URL、CSV文本或sklearn数据集名
             dataset_name: 可选的数据集名称
             
         Returns:
@@ -222,8 +245,12 @@ class DataAnalyzerAgent:
             "dataset_name": dataset_name
         })
         
-        # 调用引擎加载数据
-        result = self.engine.load_data(data_source, "csv", dataset_name)
+        # 检查是否是从sklearn加载数据集
+        if SKLEARN_AVAILABLE and data_source in ['iris', 'wine', 'breast_cancer', 'diabetes', 'california_housing']:
+            result = self._load_sklearn_dataset(data_source, dataset_name)
+        else:
+            # 调用引擎加载数据
+            result = self.engine.load_data(data_source, "csv", dataset_name)
         
         # 如果加载成功，更新当前数据集
         if result.get("success"):
@@ -235,6 +262,63 @@ class DataAnalyzerAgent:
             }
         
         return result
+
+    def _load_sklearn_dataset(self, dataset_name: str, custom_name: Optional[str] = None) -> Dict[str, Any]:
+        """
+        从sklearn加载标准数据集
+        
+        Args:
+            dataset_name: 数据集名称
+            custom_name: 自定义数据集名称
+            
+        Returns:
+            加载结果字典
+        """
+        try:
+            # 根据数据集名称加载对应的数据
+            if dataset_name == 'iris':
+                data = load_iris()
+            elif dataset_name == 'wine':
+                data = load_wine()
+            elif dataset_name == 'breast_cancer':
+                data = load_breast_cancer()
+            elif dataset_name == 'diabetes':
+                data = load_diabetes()
+            elif dataset_name == 'california_housing':
+                data = fetch_california_housing()
+            
+            # 构建DataFrame
+            df = pd.DataFrame(data.data, columns=data.feature_names)
+            if hasattr(data, 'target'):
+                # 添加目标变量列
+                target_name = 'target'
+                if hasattr(data, 'target_names') and dataset_name != 'california_housing':
+                    # 对于分类数据集，添加目标名称映射
+                    target_name = 'target_name'
+                    df[target_name] = [data.target_names[i] for i in data.target]
+                else:
+                    # 对于回归数据集或其他情况，直接使用target值
+                    df['target'] = data.target
+            
+            # 生成数据集ID
+            dataset_id = custom_name if custom_name else dataset_name
+            
+            # 存储到引擎中
+            self.engine.datasets[dataset_id] = df
+            self.engine.current_dataset_id = dataset_id
+            
+            return {
+                "success": True,
+                "dataset_id": dataset_id,
+                "data_shape": df.shape,
+                "columns": list(df.columns),
+                "message": f"成功加载sklearn数据集: {dataset_name}"
+            }
+        except Exception as e:
+            return {
+                "success": False,
+                "error": f"加载sklearn数据集失败: {str(e)}"
+            }
 
     def execute_analysis(self, user_request: str) -> Dict[str, Any]:
         """
@@ -340,6 +424,26 @@ class DataAnalyzerAgent:
                     }
                 }
             ]
+        elif "可视化" in user_request_lower or "图表" in user_request_lower:
+            # 可视化分析
+            return [
+                {
+                    "type": "clean",
+                    "name": "数据清洗",
+                    "params": {
+                        "operations": [
+                            {"method": "fillna", "value": 0}
+                        ]
+                    }
+                },
+                {
+                    "type": "visualize",
+                    "name": "数据可视化",
+                    "params": {
+                        "chart_type": "bar"
+                    }
+                }
+            ]
         else:
             # 综合分析
             return [
@@ -371,6 +475,29 @@ class DataAnalyzerAgent:
         """
         return self.context
 
+    def get_current_dataset_info(self) -> Dict[str, Any]:
+        """
+        获取当前数据集信息
+        
+        Returns:
+            数据集信息字典
+        """
+        if not self.context["current_dataset"]:
+            return {"error": "当前没有加载任何数据集"}
+        
+        dataset_id = self.context["current_dataset"]
+        if dataset_id not in self.engine.datasets:
+            return {"error": f"数据集 {dataset_id} 不存在"}
+        
+        df = self.engine.datasets[dataset_id]
+        return {
+            "dataset_id": dataset_id,
+            "shape": df.shape,
+            "columns": list(df.columns),
+            "data_types": {col: str(dtype) for col, dtype in df.dtypes.items()},
+            "head": df.head().to_dict('records') if not df.empty else {}
+        }
+
     def chat(self, message: str) -> Any:
         """
         与智能体对话
@@ -385,37 +512,36 @@ class DataAnalyzerAgent:
         full_message = f"{self._get_system_prompt()}\n\n用户请求: {message}"
         return self.agent.print_response(full_message, stream=True)
 
+    # 工具函数，供智能体调用
+    def get_dataset_columns(self) -> Dict[str, Any]:
+        """
+        获取当前数据集的列信息
+        
+        Returns:
+            列信息字典
+        """
+        info = self.get_current_dataset_info()
+        if "error" in info:
+            return info
+        
+        return {
+            "dataset_id": info["dataset_id"],
+            "columns": info["columns"],
+            "data_types": info["data_types"]
+        }
 
-# 使用示例
-if __name__ == "__main__":
-    # 创建数据分析智能体实例
-    analyzer = DataAnalyzerAgent()
-    
-    # 示例：加载数据并进行分析
-    # 注意：这里需要提供真实的CSV数据路径或内容
-    
-    # 方式1：加载本地CSV文件
-    # result = analyzer.load_data("path/to/your/data.csv", "sales_data")
-    
-    # 方式2：加载CSV文本数据
-    sample_data = """name,age,income,department
-Alice,30,50000,Engineering
-Bob,25,45000,Marketing
-Charlie,35,60000,Engineering
-Diana,28,52000,Marketing"""
-    
-    # 加载示例数据
-    result = analyzer.load_data(sample_data, "employee_data")
-    print("数据加载结果:", result)
-    
-    # 执行基础分析
-    analysis_result = analyzer.execute_analysis("请进行基础数据分析")
-    print("分析结果:", analysis_result)
-    
-    # 查看上下文
-    context = analyzer.get_context()
-    print("当前上下文:", context)
-    
-    # 与智能体对话
-    print("\n与智能体对话:")
-    analyzer.chat("这个数据集中有哪些列？")
+    def get_dataset_shape(self) -> Dict[str, Any]:
+        """
+        获取当前数据集的形状信息
+        
+        Returns:
+            形状信息字典
+        """
+        info = self.get_current_dataset_info()
+        if "error" in info:
+            return info
+        
+        return {
+            "dataset_id": info["dataset_id"],
+            "shape": info["shape"]
+        }

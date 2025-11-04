@@ -9,3 +9,6 @@ python-dotenv
 agno
 lancedb
 openai
+scikit-learn
+fastapi
+uvicorn
