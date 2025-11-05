@@ -154,7 +154,7 @@ def filter_data(column: str, operator: str, value: float) -> Dict[str, Any]:
     
     Args:
         column: 列名
-        operator: 操作符 (==, !=, >, <, >=, <=)
+        operator: 操作符 (==, !=, >, <, >=, <=, isin, notin, contains, startswith, endswith)
         value: 比较值
         
     Returns:
@@ -185,6 +185,25 @@ def filter_data(column: str, operator: str, value: float) -> Dict[str, Any]:
             filtered_df = df[df[column] >= value]
         elif operator == "<=":
             filtered_df = df[df[column] <= value]
+        elif operator == "isin":
+            # 值在列表中，要求value是一个列表
+            if not isinstance(value, list):
+                return {"error": "isin操作符要求value为列表类型"}
+            filtered_df = df[df[column].isin(value)]
+        elif operator == "notin":
+            # 值不在列表中，要求value是一个列表
+            if not isinstance(value, list):
+                return {"error": "notin操作符要求value为列表类型"}
+            filtered_df = df[~df[column].isin(value)]
+        elif operator == "contains":
+            # 字符串包含特定子串（适用于字符串列）
+            filtered_df = df[df[column].astype(str).str.contains(str(value), na=False)]
+        elif operator == "startswith":
+            # 字符串以特定前缀开头（适用于字符串列）
+            filtered_df = df[df[column].astype(str).str.startswith(str(value), na=False)]
+        elif operator == "endswith":
+            # 字符串以特定后缀结尾（适用于字符串列）
+            filtered_df = df[df[column].astype(str).str.endswith(str(value), na=False)]
         else:
             return {"error": f"不支持的操作符: {operator}"}
         
