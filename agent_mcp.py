@@ -11,10 +11,6 @@ from typing import Dict, Any
 from agno.agent import Agent
 from agno.models.lmstudio import LMStudio
 from agno.tools.mcp import MCPTools
-from agno.knowledge.knowledge import Knowledge
-from agno.vectordb.lancedb import LanceDb, SearchType
-from agno.knowledge.embedder.openai import OpenAIEmbedder
-
 
 async def run_data_analysis_agent(message: str) -> None:
     """
@@ -23,61 +19,38 @@ async def run_data_analysis_agent(message: str) -> None:
     Args:
         message: 用户的查询消息
     """
-    # 初始化知识库，参考data_analyzer_agent.py的配置
-    knowledge = Knowledge(
-        vector_db=LanceDb(
-            table_name="data_analysis_knowledge",
-            uri="tmp/lancedb",
-            search_type=SearchType.vector,
-            embedder=OpenAIEmbedder(
-                id="text-embedding-nomic-embed-text-v1.5",
-                base_url="http://127.0.0.1:1234/v1",
-                api_key="sk-nomic-api-key",
-                dimensions=768
-            ),
-        ),
-    )
+
     
     # 添加知识内容
-    knowledge_content = """
+    prompt = """
+
+    """
+    
+
+    # 使用streamable-http替代已弃用的SSE
+    async with MCPTools(
+        transport="sse",
+        url="http://127.0.0.1:8000/sse"  # 默认FastMCP HTTP地址
+    ) as data_analysis_server:
+        # 创建智能体，使用LMStudio模型（参考data_analyzer_agent.py）并连接到MCP服务端
+        agent = Agent(
+            model=LMStudio(id="qwen3-4b-thinking-2507"),
+            tools=[data_analysis_server],
+            markdown=True,
+            # 系统提示词：指导智能体如何使用工具进行数据分析
+            instructions="""
 # 数据分析智能体使用指南
 
-## 基础概念
+## 角色定位
+你是数据分析专家助手，专门帮助用户分析和处理数据集。
 
-数据分析智能体是一个能够处理和分析数据集的强大工具。它基于MCP协议，可以通过自然语言指令执行各种数据分析任务。
-
-## 核心功能
-
-### 1. 数据加载
-- 支持加载sklearn标准数据集 (iris, wine, breast_cancer, diabetes, california_housing)
-
-### 2. 数据探索
-- 描述性统计分析
-- 相关性分析
-- 数据分布查看
-- 唯一值计数
-
-### 3. 数据过滤
-- 使用条件表达式筛选数据
-- 支持多种比较操作符 (==, !=, >, <, >=, <=)
-
-### 4. 分组聚合分析
-- 按指定列分组
-- 应用聚合函数 (mean, sum, count, min, max)
-
-## 使用方法
-
-### 加载数据
-用户可以通过以下方式加载数据：
-- "加载iris数据集"
-- "请加载wine数据集进行分析"
-
-### 发起分析请求
-用户可以直接使用自然语言描述想要进行的分析，例如：
-- "帮我看看这个数据的基本情况"
-- "分析各特征之间的相关性"
-- "筛选出满足条件的数据"
-- "按类别分组计算平均值"
+## 工具清单
+1. load_dataset: 加载sklearn标准数据集
+2. get_dataset_info: 获取当前数据集信息
+3. get_basic_statistics: 获取基础统计信息
+4. get_correlation_matrix: 获取相关性矩阵
+5. filter_data: 根据条件过滤数据
+6. group_by_analysis: 分组聚合分析
 
 ## 工具详解
 
@@ -103,39 +76,8 @@ async def run_data_analysis_agent(message: str) -> None:
 ### 6. group_by_analysis
 按指定列分组并进行聚合分析
 参数: group_column (分组列), agg_column (聚合列), agg_function (聚合函数)
-    """
-    
-    # 将知识添加到知识库（使用异步方式）
-    await knowledge.add_content_async(
-        name="Data Analysis Guide",
-        text_content=knowledge_content,
-    )
-    
-    # 使用streamable-http替代已弃用的SSE
-    async with MCPTools(
-        transport="sse",
-        url="http://127.0.0.1:8000/sse"  # 默认FastMCP HTTP地址
-    ) as data_analysis_server:
-        # 创建智能体，使用LMStudio模型（参考data_analyzer_agent.py）并连接到MCP服务端
-        agent = Agent(
-            model=LMStudio(id="qwen3-4b-thinking-2507"),
-            tools=[data_analysis_server],
-            knowledge=knowledge,
-            # 启用RAG，在用户提示中添加来自知识库的参考信息
-            add_knowledge_to_context=True,
-            markdown=True,
-            # 启用工具调用的系统提示
-            instructions="""
-你是数据分析专家助手，专门帮助用户分析和处理数据集。
-你可以使用以下工具执行数据分析任务：
 
-1. load_dataset: 加载sklearn标准数据集
-2. get_dataset_info: 获取当前数据集信息
-3. get_basic_statistics: 获取基础统计信息
-4. get_correlation_matrix: 获取相关性矩阵
-5. filter_data: 根据条件过滤数据
-6. group_by_analysis: 分组聚合分析
-
+## 使用流程
 当你收到用户的数据分析请求时，请按照以下步骤操作：
 
 1. 首先理解用户的需求
@@ -143,7 +85,7 @@ async def run_data_analysis_agent(message: str) -> None:
 3. 使用合适的工具执行分析
 4. 清晰地向用户解释分析结果
 
-注意事项：
+## 注意事项
 - 始终确保在执行分析前数据已经正确加载
 - 以易于理解的方式呈现分析结果
 - 如果遇到错误，清晰地解释问题所在并提出解决方案
