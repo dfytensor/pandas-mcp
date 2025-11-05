@@ -41,7 +41,9 @@ def main():
         "分析iris数据集中各特征之间的相关性",
         "告诉我iris数据集的基础统计信息",
         "筛选出sepal length大于5.0的数据并显示前5行",
-        "按target分组，计算sepal length的平均值"
+        "按target分组，计算sepal length的平均值",
+        "请从SQLite数据库加载employees表",
+        "请从SQLite数据库加载sales表并显示前5行数据"
     ]
 
     print("数据分析智能体MCP客户端")
@@ -49,6 +51,11 @@ def main():
     print("支持的查询示例:")
     for i, query in enumerate(test_queries, 1):
         print(f"{i}. {query}")
+    print("=" * 40)
+    print("\n提示：")
+    print("- 输入数字可快速选择示例查询")
+    print("- 可以输入自定义的中文数据分析请求")
+    print("- 支持sklearn数据集和SQLite数据库两种数据源")
     print("=" * 40)
 
     # 用户输入查询

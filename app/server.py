@@ -20,11 +20,12 @@ import asyncio
 import threading
 from datetime import datetime
 import traceback
-from app.config import available_datasets, dataset_timeout
+from app.config import available_datasets, dataset_timeout, data_type, sqlite_config
+import sqlite3
+import os
 
 # 创建FastMCP实例，支持HTTP协议
 mcp = FastMCP("data_analysis_server")
-
 
 # 存储数据集的字典，包含时间戳
 # 格式: {dataset_id: {"data": DataFrame, "timestamp": timestamp}}
@@ -40,20 +41,31 @@ analysis_history = []
 class PandasBlocksEngine:
     """Pandas积木执行引擎"""
 
-    def load_data(self, data_source: str, data_type: str = "csv", dataset_name: str = None) -> Dict[str, Any]:
+    def load_data(self, data_source: str, data_type_param: str = "auto", dataset_name: str = None) -> Dict[str, Any]:
         """加载数据积木"""
         try:
             df = None
+            
+            # 如果没有指定数据类型，使用配置中的默认类型
+            if data_type_param == "auto":
+                data_type_param = data_type
 
-            if data_type == "csv":
+            # 根据数据类型加载数据
+            if data_type_param == "sk-learn":
+                # 从sklearn加载数据集
+                df = self._load_sklearn_dataset(data_source)
+            elif data_type_param == "sqlite":
+                # 从SQLite加载数据表
+                df = self._load_sqlite_table(data_source)
+            elif data_type_param == "csv":
                 if data_source.startswith(("http://", "https://")):
                     df = pd.read_csv(data_source)
                 else:
                     # 尝试解析CSV字符串
                     df = pd.read_csv(io.StringIO(data_source))
-            elif data_type == "json":
+            elif data_type_param == "json":
                 df = pd.read_json(io.StringIO(data_source))
-            elif data_type == "excel":
+            elif data_type_param == "excel":
                 df = pd.read_excel(io.BytesIO(data_source.encode() if isinstance(data_source, str) else data_source))
             else:
                 # 自动检测类型
@@ -63,7 +75,7 @@ class PandasBlocksEngine:
                     try:
                         df = pd.read_json(io.StringIO(data_source))
                     except:
-                        return {"error": f"无法自动检测数据类型: {data_type}"}
+                        return {"error": f"无法自动检测数据类型: {data_type_param}"}
 
             # 生成数据集ID
             if not dataset_name:
@@ -92,6 +104,53 @@ class PandasBlocksEngine:
 
         except Exception as e:
             return {"error": f"数据加载失败: {str(e)}"}
+
+    def _load_sklearn_dataset(self, dataset_name: str) -> pd.DataFrame:
+        """从sklearn加载数据集"""
+        if dataset_name == "iris":
+            data = load_iris()
+        elif dataset_name == "wine":
+            data = load_wine()
+        elif dataset_name == "breast_cancer":
+            data = load_breast_cancer()
+        elif dataset_name == "diabetes":
+            data = load_diabetes()
+        elif dataset_name == "california_housing":
+            data = fetch_california_housing()
+        else:
+            raise ValueError(f"不支持的sklearn数据集: {dataset_name}")
+        
+        # 构建DataFrame
+        df = pd.DataFrame(data.data, columns=data.feature_names)
+        if hasattr(data, 'target'):
+            # 添加目标变量列
+            target_name = 'target'
+            if hasattr(data, 'target_names') and dataset_name != 'california_housing':
+                # 对于分类数据集，添加目标名称映射
+                df[target_name] = [data.target_names[i] for i in data.target]
+            else:
+                # 对于回归数据集或其他情况，直接使用target值
+                df[target_name] = data.target
+        
+        return df
+
+    def _load_sqlite_table(self, table_name: str) -> pd.DataFrame:
+        """从SQLite数据库加载表"""
+        # 获取数据库路径
+        db_path = sqlite_config.get("default_path", "data/default.db")
+        
+        # 检查数据库文件是否存在
+        if not os.path.exists(db_path):
+            raise FileNotFoundError(f"数据库文件不存在: {db_path}")
+        
+        # 连接数据库并读取表
+        conn = sqlite3.connect(db_path)
+        try:
+            df = pd.read_sql_query(f"SELECT * FROM {table_name}", conn)
+        finally:
+            conn.close()
+        
+        return df
 
     def execute_pipeline(self, blocks_config: List[Dict], dataset_id: str = None) -> Dict[str, Any]:
         """执行积木流水线"""
@@ -570,13 +629,13 @@ def get_dataset(dataset_id: str):
 
 # MCP工具定义
 @mcp.tool()
-def load_dataset(data_content: str, data_type: str = "csv", dataset_name: str = None) -> Dict[str, Any]:
+def load_dataset(data_content: str, data_type: str = "auto", dataset_name: str = None) -> Dict[str, Any]:
     """
     加载数据集到Pandas积木引擎
 
     Args:
-        data_content: 数据内容（CSV字符串、JSON字符串或URL）
-        data_type: 数据类型（csv/json/excel/auto）
+        data_content: 数据内容（数据集名称、表名、CSV字符串、JSON字符串或URL）
+        data_type: 数据类型（sk-learn/sqlite/csv/json/excel/auto）
         dataset_name: 可选的数据集名称
     """
     return engine.load_data(data_content, data_type, dataset_name)
@@ -634,41 +693,213 @@ def get_dataset_information(dataset_id: str = None) -> Dict[str, Any]:
 
 
 @mcp.tool()
-def quick_analysis(data_content: str, analysis_type: str = "comprehensive") -> Dict[str, Any]:
+def get_basic_statistics(dataset_id: str = None) -> Dict[str, Any]:
     """
-    快速数据分析（一键式）
-
+    获取数据集的基础统计信息
+    
     Args:
-        data_content: 数据内容
-        analysis_type: 分析类型（basic/comprehensive/statistical）
+        dataset_id: 可选的数据集ID（默认为当前数据集）
     """
-    # 先加载数据
-    load_result = engine.load_data(data_content, "csv")
-    if "error" in load_result:
-        return load_result
+    if not dataset_id:
+        dataset_id = current_dataset_id
+        
+    if dataset_id not in datasets:
+        return {"error": f"数据集不存在: {dataset_id}"}
+        
+    df = datasets[dataset_id]["data"]
+    numeric_df = df.select_dtypes(include=[np.number])
+    
+    if numeric_df.empty:
+        return {"error": "数据集中没有数值列"}
+        
+    return {
+        "dataset_id": dataset_id,
+        "statistics": numeric_df.describe().to_dict()
+    }
 
-    dataset_id = load_result["dataset_id"]
 
-    # 根据分析类型配置积木
-    if analysis_type == "basic":
-        blocks = [
-            {"type": "clean", "name": "基础清洗", "params": {"operations": [
-                {"method": "fillna", "value": 0}
-            ]}},
-            {"type": "analyze", "name": "描述性统计", "params": {"analysis_type": "basic"}}
-        ]
-    else:  # comprehensive
-        blocks = [
-            {"type": "clean", "name": "数据清洗", "params": {"operations": [
-                {"method": "fillna", "value": 0},
-                {"method": "drop_duplicates"
-                }
-            ]}},
-            {"type": "analyze", "name": "统计分析", "params": {"analysis_type": "basic"}},
-            {"type": "analyze", "name": "相关性分析", "params": {"analysis_type": "correlation"}}
-        ]
+@mcp.tool()
+def get_correlation_matrix(dataset_id: str = None) -> Dict[str, Any]:
+    """
+    计算数值列之间的相关性矩阵
+    
+    Args:
+        dataset_id: 可选的数据集ID（默认为当前数据集）
+    """
+    if not dataset_id:
+        dataset_id = current_dataset_id
+        
+    if dataset_id not in datasets:
+        return {"error": f"数据集不存在: {dataset_id}"}
+        
+    df = datasets[dataset_id]["data"]
+    numeric_df = df.select_dtypes(include=[np.number])
+    
+    if numeric_df.empty:
+        return {"error": "数据集中没有数值列"}
+        
+    return {
+        "dataset_id": dataset_id,
+        "correlation_matrix": numeric_df.corr().to_dict()
+    }
 
-    return engine.execute_pipeline(blocks, dataset_id)
+
+@mcp.tool()
+def filter_data(column: str, operator: str, value: Any, dataset_id: str = None) -> Dict[str, Any]:
+    """
+    根据条件过滤数据
+    
+    Args:
+        column: 列名
+        operator: 操作符 (==, !=, >, <, >=, <=)
+        value: 比较值
+        dataset_id: 可选的数据集ID（默认为当前数据集）
+    """
+    if not dataset_id:
+        dataset_id = current_dataset_id
+        
+    if dataset_id not in datasets:
+        return {"error": f"数据集不存在: {dataset_id}"}
+        
+    df = datasets[dataset_id]["data"]
+    
+    if column not in df.columns:
+        return {"error": f"列 {column} 不存在"}
+        
+    # 构造过滤条件
+    try:
+        if operator == "==":
+            filtered_df = df[df[column] == value]
+        elif operator == "!=":
+            filtered_df = df[df[column] != value]
+        elif operator == ">":
+            filtered_df = df[df[column] > value]
+        elif operator == "<":
+            filtered_df = df[df[column] < value]
+        elif operator == ">=":
+            filtered_df = df[df[column] >= value]
+        elif operator == "<=":
+            filtered_df = df[df[column] <= value]
+        else:
+            return {"error": f"不支持的操作符: {operator}"}
+            
+        # 更新数据集
+        datasets[dataset_id] = {"data": filtered_df, "timestamp": time.time()}
+        
+        return {
+            "dataset_id": dataset_id,
+            "message": f"成功过滤数据，剩余 {len(filtered_df)} 行",
+            "filtered_shape": filtered_df.shape
+        }
+    except Exception as e:
+        return {"error": f"过滤数据时出错: {str(e)}"}
+
+
+@mcp.tool()
+def group_by_analysis(group_column: str, agg_column: str, agg_function: str, dataset_id: str = None) -> Dict[str, Any]:
+    """
+    按指定列分组并进行聚合分析
+    
+    Args:
+        group_column: 分组列
+        agg_column: 聚合列
+        agg_function: 聚合函数 (mean, sum, count, min, max)
+        dataset_id: 可选的数据集ID（默认为当前数据集）
+    """
+    if not dataset_id:
+        dataset_id = current_dataset_id
+        
+    if dataset_id not in datasets:
+        return {"error": f"数据集不存在: {dataset_id}"}
+        
+    df = datasets[dataset_id]["data"]
+    
+    if group_column not in df.columns:
+        return {"error": f"分组列 {group_column} 不存在"}
+        
+    if agg_column not in df.columns:
+        return {"error": f"聚合列 {agg_column} 不存在"}
+        
+    try:
+        if agg_function == "mean":
+            result = df.groupby(group_column)[agg_column].mean()
+        elif agg_function == "sum":
+            result = df.groupby(group_column)[agg_column].sum()
+        elif agg_function == "count":
+            result = df.groupby(group_column)[agg_column].count()
+        elif agg_function == "min":
+            result = df.groupby(group_column)[agg_column].min()
+        elif agg_function == "max":
+            result = df.groupby(group_column)[agg_column].max()
+        else:
+            return {"error": f"不支持的聚合函数: {agg_function}"}
+            
+        return {
+            "dataset_id": dataset_id,
+            "group_column": group_column,
+            "agg_column": agg_column,
+            "agg_function": agg_function,
+            "result": result.to_dict()
+        }
+    except Exception as e:
+        return {"error": f"分组聚合分析时出错: {str(e)}"}
+
+
+@mcp.tool()
+def get_column_unique_values(column: str, dataset_id: str = None) -> Dict[str, Any]:
+    """
+    获取列的唯一值
+    
+    Args:
+        column: 列名
+        dataset_id: 可选的数据集ID（默认为当前数据集）
+    """
+    if not dataset_id:
+        dataset_id = current_dataset_id
+        
+    if dataset_id not in datasets:
+        return {"error": f"数据集不存在: {dataset_id}"}
+        
+    df = datasets[dataset_id]["data"]
+    
+    if column not in df.columns:
+        return {"error": f"列 {column} 不存在"}
+        
+    unique_values = df[column].unique().tolist()
+    
+    return {
+        "dataset_id": dataset_id,
+        "column": column,
+        "unique_values_count": len(unique_values),
+        "unique_values": unique_values
+    }
+
+
+@mcp.tool()
+def get_data_summary(dataset_id: str = None) -> Dict[str, Any]:
+    """
+    获取数据综合摘要
+    
+    Args:
+        dataset_id: 可选的数据集ID（默认为当前数据集）
+    """
+    if not dataset_id:
+        dataset_id = current_dataset_id
+        
+    if dataset_id not in datasets:
+        return {"error": f"数据集不存在: {dataset_id}"}
+        
+    df = datasets[dataset_id]["data"]
+    
+    return {
+        "dataset_id": dataset_id,
+        "shape": df.shape,
+        "columns": list(df.columns),
+        "dtypes": {col: str(dtype) for col, dtype in df.dtypes.items()},
+        "null_counts": df.isnull().sum().to_dict(),
+        "numeric_summary": df.describe().to_dict() if not df.select_dtypes(include=[np.number]).empty else {},
+        "sample_data": df.head().to_dict('records')
+    }
 
 
 @mcp.tool()
@@ -685,7 +916,12 @@ if __name__ == "__main__":
     print("- load_dataset: 加载数据集")
     print("- execute_analysis_pipeline: 执行分析流水线")
     print("- get_dataset_information: 获取数据集信息")
-    print("- quick_analysis: 快速分析")
+    print("- get_basic_statistics: 获取基础统计信息")
+    print("- get_correlation_matrix: 获取相关性矩阵")
+    print("- filter_data: 根据条件过滤数据")
+    print("- group_by_analysis: 分组聚合分析")
+    print("- get_column_unique_values: 获取列的唯一值")
+    print("- get_data_summary: 获取数据综合摘要")
     print("- get_analysis_history: 获取分析历史")
     print("\n支持的积木类型:")
     print("- clean: 数据清洗")
